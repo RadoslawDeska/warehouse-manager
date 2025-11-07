@@ -1,4 +1,8 @@
-
+import argparse
+import csv
+import os
+import shlex
+import sys
 
 items = [{
             'Name': "Milk",
@@ -64,14 +68,65 @@ def _get_costs():
 def _get_income():
     return sum([item['Quantity'] * item['Unit Price'] for item in sold_items])
 
+def _export_items_to_csv():
+    with open("magazyn.csv", "w", newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(items)
+    print("Successfully exported data to magazyn.csv")
+
+def _export_sales_to_csv():
+    with open("sprzedaż.csv", "w", newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(sold_items)
+    print("Successfully exported data to sprzedaż.csv")
+
+def _import_items_from_csv(path="magazyn.csv"):
+    if not os.path.exists(path):
+        print(f"File '{path}' not found. Warehouse file not loaded.")
+        return
+    with open(path, "r", newline='') as f:
+        reader = csv.DictReader(f, fieldnames=columns)
+        reader.__next__()  # Skip header
+        items.clear()
+        for row in reader:
+            for key in ['Quantity', 'Unit Price']:
+                row[key] = float(row[key])
+            items.append(row)
+    print(f'Successfully loaded warehouse data from "{path}"')
+
+def _import_sales_from_csv(path="sprzedaż.csv"):
+    if not os.path.exists(path):
+        print(f"File '{path}' not found. Sales file not loaded.")
+        return
+    with open(path, "r", newline='') as f:
+        reader = csv.DictReader(f, fieldnames=columns)
+        reader.__next__()  # Skip header
+        sold_items.clear()
+        for row in reader:
+            for key in ['Quantity', 'Unit Price']:
+                row[key] = float(row[key])
+            sold_items.append(row)
+    print(f'Successfully loaded sales data from "{path}"')
+
 
 @register("help")
 def show_help():
     print("Available commands:")
     for command in registered_commands.keys():
         print(f" - {command}")
-    print("Type 'exit' to quit the program.")
+    print("Type 'exit' or 'quit' to quit the program.")
 
+@register("exit")
+def exit_command():
+    """Exit the program (same as typing Ctrl+C)."""
+    sys.exit(0)
+
+@register("quit")
+def quit_command():
+    """Alternate name for exit."""
+    sys.exit(0)
 
 @register("show")
 def get_items():
@@ -138,14 +193,97 @@ def show_revenue():
     print("-"*10)
     print(f"Revenue: {inc - cost} PLN")
 
+
+@register("save")
+def export_warehouse_to_csv():
+    _export_items_to_csv()
+    _export_sales_to_csv()
+
+
+@register("load")
+def import_warehouse_from_csv(items=None, sales=None):
+    """
+    Load only the files explicitly specified.
+    - items: path to warehouse CSV or None
+    - sales: path to sales CSV or None
+    If both are None, nothing is loaded (and a short message is printed).
+    """
+    if items is None and sales is None:
+        print("No files specified to load. Use: load items=PATH and/or sales=PATH")
+        return
+
+    if items is not None:
+        _import_items_from_csv(items)
+    if sales is not None:
+        _import_sales_from_csv(sales)
+
+def parse_arguments():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("-w", "--warehouse",
+                        type=str,
+                        dest="warehouse_file",
+                        default="magazyn.csv",
+                        required=False)
+    parser.add_argument("-s", "--sales",
+                        type=str,
+                        dest="sales_file",
+                        default="sprzedaż.csv",
+                        required=False)
+    
+    return parser.parse_args()
+
+def parse_command_input(inp):
+    if inp.strip() == "":
+        return None, [], {}
+    try:
+        parts = shlex.split(inp)
+    except ValueError as e:
+        raise ValueError(f"Error parsing command: {e}")
+    if not parts:
+        return None, [], {}
+    cmd_name = parts[0].lower()
+    # If there are any arguments to the command, collect them
+    args = []
+    kwargs = {}
+    for argument in parts[1:]:
+        if '=' in argument:
+            k, v = argument.split('=', 1)
+            kwargs[k] = v
+        else:
+            args.append(argument)
+    return cmd_name, args, kwargs
+
+def dispatch_command(cmd_name, args, kwargs):
+    """Lookup and invoke a registered command; print a helpful message on error."""
+    if cmd_name is None:
+        return  # empty user input
+    command = registered_commands.get(cmd_name)
+    if command is None:
+        print("Unknown command. Type 'help' to see available commands.")
+        return
+    try:
+        command(*args, **kwargs)
+    except TypeError:
+        print("Incorrect arguments for command.")
+
+
+
 if __name__ == "__main__":
+    args = parse_arguments()
+    import_warehouse_from_csv(items=args.warehouse_file, sales=args.sales_file)
+    
+    # Main loop
     while True:
         inp = input("What would you like to do? ")
+        if not inp:
+            continue
         if inp.lower() == "exit":
             break
         
-        command = registered_commands.get(inp.lower(), None)
-        if command is None:
-            print("Unknown command. Type 'help' to see available commands.")
-        else:
-            command()
+        try:
+            cmd_name, args, kwargs = parse_command_input(inp)
+        except ValueError as e:
+            print(e)
+            continue
+        
+        dispatch_command(cmd_name, args, kwargs)
