@@ -1,233 +1,270 @@
 import argparse
-import csv
+import decimal
+from decimal import Decimal
 import os
 import shlex
 import sys
+from typing import Callable
 
-items = [{
-            'Name': "Milk",
-            'Quantity': 120,
-            'Unit': "L",
-            'Unit Price': 2.3
-        },
-         {
-            'Name': "Sugar",
-            'Quantity': 1000,
-            'Unit': "kg",
-            'Unit Price': 3.0 
-        },
-        {
-            'Name': "Flour",
-            'Quantity': 12000,
-            'Unit': "kg",
-            'Unit Price': 1.2 
-        },
-        {
-            'Name': "Coffee",
-            'Quantity': 2500,
-            'Unit': "kg",
-            'Unit Price': 40.0 
-        }
-]
+from classes.item import Item
+from classes.format import Formatter
+from classes.decimals import numeric_input
+from classes.io import IO_CSV, IO_JSON
 
-sold_items = []
 
-columns = ["Name", "Quantity", "Unit", "Unit Price"]
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-registered_commands = {}
+quantize_exp = Decimal('0.01')
+rounding = decimal.ROUND_HALF_UP
+
+registered_commands : dict[str, Callable[[str], list[Item]]] = {}
+registered_loaders : dict[str, Callable[[str], list[Item]]] = {}
 
 def register(command):
+    """Decorator to register a function as a user-supplied command."""
     def decorator(func):
         registered_commands[command] = func
         return func
     return decorator
 
-def _get_widths():
-    return [10,8,6,10]
-
-def _format_row(item: dict) -> str:
-    widths = _get_widths()
-    row = []
-    for i, column in enumerate(columns):
-        if column == "Name" or column == "Unit":
-            align = '<'
+def register_loader(extension):
+    """Decorator to register a function based on one or more file extensions."""
+    def decorator(func):
+        if isinstance(extension, (list, tuple, set)):
+            for ext in extension:
+                registered_loaders[ext] = func
         else:
-            align = '>'
-        row.append(f"{item[column]:{align}{widths[i]}}")
-    return "\t".join(row)
+            registered_loaders[extension] = func
+        return func
+    return decorator
 
-def _format_header(columns: list) -> str:
-    widths = _get_widths()
-    row = [f"{column:{widths[i]}}" for i, column in enumerate(columns)]
-    row2 = [f"{'-'*widths[i]}" for i in range(len(columns))]
-    return "\t".join(row) + "\n" + "\t".join(row2)
-
-def _get_costs():
-    return sum([item['Quantity'] * item['Unit Price'] for item in items])
-
-def _get_income():
-    return sum([item['Quantity'] * item['Unit Price'] for item in sold_items])
-
-def _export_items_to_csv():
-    with open("magazyn.csv", "w", newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=columns)
-        writer.writeheader()
-        writer.writerows(items)
-    print("Successfully exported data to magazyn.csv")
-
-def _export_sales_to_csv():
-    with open("sprzedaż.csv", "w", newline='') as f:
-        writer = csv.DictWriter(f, fieldnames=columns)
-        writer.writeheader()
-        writer.writerows(sold_items)
-    print("Successfully exported data to sprzedaż.csv")
-
-def _import_items_from_csv(path="magazyn.csv"):
-    if not os.path.exists(path):
-        print(f"File '{path}' not found. Warehouse file not loaded.")
-        return
-    with open(path, "r", newline='') as f:
-        reader = csv.DictReader(f, fieldnames=columns)
-        reader.__next__()  # Skip header
-        items.clear()
-        for row in reader:
-            for key in ['Quantity', 'Unit Price']:
-                row[key] = float(row[key])
-            items.append(row)
-    print(f'Successfully loaded warehouse data from "{path}"')
-
-def _import_sales_from_csv(path="sprzedaż.csv"):
-    if not os.path.exists(path):
-        print(f"File '{path}' not found. Sales file not loaded.")
-        return
-    with open(path, "r", newline='') as f:
-        reader = csv.DictReader(f, fieldnames=columns)
-        reader.__next__()  # Skip header
-        sold_items.clear()
-        for row in reader:
-            for key in ['Quantity', 'Unit Price']:
-                row[key] = float(row[key])
-            sold_items.append(row)
-    print(f'Successfully loaded sales data from "{path}"')
-
-
+# Global commands
 @register("help")
-def show_help():
+def show_help(*args, **kwargs):
     print("Available commands:")
     for command in registered_commands.keys():
+        if command in ["quit", "exit"]:
+            continue
         print(f" - {command}")
+        if command == "load":
+            print("""
+    usage:
+    - load items=PATH_TO_ITEMS
+    - load sales=PATH_TO_SALES
+    - load items=PATH_TO_ITEMS sales=PATH_TO_SALES
+""".strip("\n"))
     print("Type 'exit' or 'quit' to quit the program.")
 
 @register("exit")
-def exit_command():
+def exit_command(*args, **kwargs):
     """Exit the program (same as typing Ctrl+C)."""
     sys.exit(0)
 
 @register("quit")
-def quit_command():
+def quit_command(*args, **kwargs):
     """Alternate name for exit."""
     sys.exit(0)
 
-@register("show")
-def get_items():
-    header = _format_header(columns)
-    print(header)
 
-    for item in items:
-        row = _format_row(item)
-        print(row)
+# Loaders
+@register_loader("csv")
+def csv_loader(path: str, /, fieldnames: list[str], *, data=None, mode=None) -> tuple[bool, list[Item] | None]:
+    if mode == "r":
+        return IO_CSV._read_csv(path, fieldnames)
+    elif mode == "w":
+        if data is None:
+            data = []
+        return IO_CSV._write_csv(path, fieldnames, data), None
+    else:
+        print("Wrong operation mode. Accepts only (r)ead or (w)rite.")
+        return False, None
+
+@register_loader("json")
+def json_loader(path: str, /, fieldnames=None, *, data=None, mode=None) -> tuple[bool, list[Item] | None]:
+    if mode == "r":
+        return IO_JSON._read_json(path)
+    elif mode == "w":
+        if data is None:
+            data = []
+        return IO_JSON._write_json(path, data), None
+    else:
+        print("Wrong operation mode. Accepts only (r)ead or (w)rite.")
+        return False, None
 
 
-@register("add")
-def add_item():
-    print("Adding to warehouse...")
-    name = input("Item name: ")
-    quantity = int(input("Item quantity: "))
-    unit = input("Item unit of measure (L, kg, pcs, etc.): ")
-    unit_price = float(input("Item price in PLN: "))
+# MAIN CLASS
+class Warehouse:
+    """Class representing manager of warehouse items.
+    
+    Specifies methods for adding, selling, displaying items and importing/exporting the data.
+    """
 
-    items.append({
-        'Name': name,
-        'Quantity': quantity,
-        'Unit': unit,
-        'Unit Price': unit_price
-        })
+    def __init__(self):
+        self.items : list[Item] = []
+        self.sold_items : list[Item] = []
 
+    # Define helper functions
+    def get_names(self, lst: list[Item]) -> list[str]:
+        """Return list of items' names in lowercase."""
+        return [item.name.lower() for item in lst]
 
-@register("sell")
-def sell_item():
-    name = input("Item name: ")
-    quantity = int(input("Quantity to sell: "))
-    for item in items:
-        if item['Name'].lower() == name.lower():
-            if item['Quantity'] < quantity:
-                print(f"Not enough {name} in stock! Nothing sold.")
+    
+    # Define item management methods
+    @register("add")
+    def add_item(self):
+        print("Adding to warehouse...")
+        name = input("Item name: ")
+        if name.lower() in self.get_names(self.items):
+            print(f"Item '{name}' already exists. You are about to update all fields. Use Enter to keep existing values.")
+            existing_item = next(item for item in self.items if item.name.lower() == name.lower())
+            quantity = numeric_input(f"Item quantity [{existing_item.quantity}]: ",
+                                    default=existing_item.quantity)
+            # unit = input(f"Item unit of measure (L, kg, pcs, etc.) [{existing_item.unit}]: ", 
+            #                         default=existing_item.unit)
+            unit_price = numeric_input(f"Item price in PLN [{existing_item.unit_price}]: ",
+                                    default=existing_item.unit_price)
+            # Update existing item
+            existing_item.quantity = quantity
+            existing_item.unit_price = unit_price
+
+            print(f"Successfully updated {existing_item!r}")
+        else:
+            quantity = numeric_input("Item quantity: ")
+            unit = input("Item unit of measure (L, kg, pcs, etc.): ")
+            unit_price = numeric_input("Item price in PLN: ")
+            
+            self.items.append(Item(name=name, quantity=quantity, unit=unit, unit_price=unit_price))
+
+            print(f"Successfully added {self.items[-1]!r}")
+    
+    @register("sell")
+    def sell_item(self):
+        name = input("Item name: ")
+        quantity_to_sell = numeric_input("Quantity to sell: ")
+        for item in self.items:
+            if item.name.lower() == name.lower():
+                if item.quantity < quantity_to_sell:
+                    print(f"Not enough {name} in stock! Nothing sold.")
+                    return
+                item.quantity -= quantity_to_sell
+
+                if name.lower() not in self.get_names(self.sold_items):
+                    self.sold_items.append(Item(
+                        name=item.name,
+                        quantity=quantity_to_sell,  # Important
+                        unit=item.unit,
+                        unit_price=item.unit_price))
+                else:
+                    for item in self.sold_items:
+                        if item.name.lower() == name.lower():
+                            item.quantity += quantity_to_sell
+                            break
+                print(f"Successfully sold {quantity_to_sell} {item.unit} of {name}")
                 return
-            item['Quantity'] -= quantity
+        print(f"{name} not found in warehouse! Nothing sold.")
 
-            if name.lower() not in \
-                [sold_item['Name'].lower() for sold_item in sold_items]:
-                sold_items.append({
-                    'Name': item['Name'],
-                    'Quantity': quantity,
-                    'Unit': item['Unit'],
-                    'Unit Price': item['Unit Price']
-                    })
-            else:
-                for item in sold_items:
-                    if item['Name'].lower() == name.lower():
-                        item['Quantity'] += quantity
-                        break
-            print(f"Successfully sold {quantity} {item['Unit']} of {name}")
+
+    # Define arithmetic methods
+    def _get_costs(self) -> Decimal:
+        return sum([item.quantity * item.unit_price for item in self.items], Decimal(0))
+
+    def _get_income(self) -> Decimal:
+        return sum([item.quantity * item.unit_price for item in self.sold_items], Decimal(0))
+
+    
+    # Define reporting methods
+    @register("show")
+    def get_items(self):
+        header = Formatter._format_header(COLUMNS)
+        print(header)
+
+        for item in self.items:
+            row = Formatter._format_row(item, COLUMNS)
+            print(row)
+
+    @register("show_revenue")
+    def show_revenue(self):
+        inc = self._get_income()
+        cost = self._get_costs()
+        revenue = Decimal(inc - cost).quantize(quantize_exp,rounding=rounding)
+        print("Revenue breakdown (PLN):")
+        print("Income: ", inc.quantize(quantize_exp,rounding=rounding))
+        print("Costs: ", cost.quantize(quantize_exp,rounding=rounding))
+        print("-"*10)
+        print(f"Revenue: {revenue} PLN")
+
+
+    # Define import/export methods
+    @staticmethod
+    def _export(path, data: list[Item], export_as="csv", fieldnames=[]):
+        loader = registered_loaders.get(export_as)
+        if loader:
+            return loader(path, fieldnames, mode='w')
+        if export_as == "csv":
+            return IO_CSV._write_csv(path, data, fieldnames)
+
+    
+    @staticmethod
+    def _import(path, import_as="csv", fieldnames=[]) -> list[Item]:
+        loader = registered_loaders.get(import_as)
+        if loader:
+            ok, lst = loader(path, fieldnames, mode='r')
+            return lst if ok else []
+        # Fallback to CSV reader
+        if import_as == "csv":
+            ok, lst = IO_CSV._read_csv(path, fieldnames)
+            return lst if ok else []
+    
+    @staticmethod
+    def detect_ext(path: str) -> str:
+        _, ext = os.path.splitext(path)
+        ext = ext.lower().lstrip('.')
+        # Prefer any registered loader matching the extension
+        if ext in registered_loaders:
+            return ext
+        # Default to csv for common or unknown/empty extensions
+        if ext == 'csv' or ext == '':
+            return 'csv'
+        print(f"Unknown file type '{ext}' for {path}. Defaulting to 'csv'.")
+        return 'csv'
+    
+    @register("load")
+    def import_warehouse(self, items_file=None, sales_file=None):
+        """
+        Load only the files explicitly specified.
+        - items: path to warehouse CSV or None
+        - sales: path to sales CSV or None
+        If both are None, nothing is loaded (and a short message is printed).
+        """
+        if not any([items_file, sales_file]):
+            print("No files specified to load. For usage use `help` command.")
             return
-    print(f"{name} not found in warehouse! Nothing sold.")
+        
+        if items_file:
+            import_as = self.detect_ext(items_file)
+            self.items = self._import(items_file, import_as=import_as, fieldnames=COLUMNS)
+        if sales_file:
+            import_as = self.detect_ext(sales_file)
+            self.sold_items = self._import(sales_file, import_as=import_as, fieldnames=COLUMNS)
+            
+    @register("save")
+    def export_warehouse(self):
+        pass
 
 
-@register("show_revenue")
-def show_revenue():
-    inc = _get_income()
-    cost = _get_costs()
-    print("Revenue breakdown (PLN):")
-    print("Income: ", inc)
-    print("Costs: ", cost)
-    print("-"*10)
-    print(f"Revenue: {inc - cost} PLN")
-
-
-@register("save")
-def export_warehouse_to_csv():
-    _export_items_to_csv()
-    _export_sales_to_csv()
-
-
-@register("load")
-def import_warehouse_from_csv(items=None, sales=None):
-    """
-    Load only the files explicitly specified.
-    - items: path to warehouse CSV or None
-    - sales: path to sales CSV or None
-    If both are None, nothing is loaded (and a short message is printed).
-    """
-    if items is None and sales is None:
-        print("No files specified to load. Use: load items=PATH and/or sales=PATH")
-        return
-
-    if items is not None:
-        _import_items_from_csv(items)
-    if sales is not None:
-        _import_sales_from_csv(sales)
 
 def parse_arguments():
+    """Parse command-line arguments passed to the script on startup."""
     parser = argparse.ArgumentParser()
     parser.add_argument("-w", "--warehouse",
                         type=str,
                         dest="warehouse_file",
-                        default="magazyn.csv",
+                        default=os.path.join(BASE_DIR, "magazyn.csv"),
                         required=False)
     parser.add_argument("-s", "--sales",
                         type=str,
                         dest="sales_file",
-                        default="sprzedaż.csv",
+                        default=os.path.join(BASE_DIR, "sprzedaż.csv"),
                         required=False)
     
     return parser.parse_args()
@@ -253,7 +290,7 @@ def parse_command_input(inp):
             args.append(argument)
     return cmd_name, args, kwargs
 
-def dispatch_command(cmd_name, args, kwargs):
+def dispatch_command(warehouse: Warehouse, cmd_name, args, kwargs):
     """Lookup and invoke a registered command; print a helpful message on error."""
     if cmd_name is None:
         return  # empty user input
@@ -262,23 +299,28 @@ def dispatch_command(cmd_name, args, kwargs):
         print("Unknown command. Type 'help' to see available commands.")
         return
     try:
-        command(*args, **kwargs)
-    except TypeError:
+        command(warehouse, *args, **kwargs)
+    except TypeError as e:
+        print("Arguments received:", args)
+        print("Kwargs received", kwargs)
         print("Incorrect arguments for command.")
-
+        print(e)
 
 
 if __name__ == "__main__":
+    os.chdir(os.path.dirname(os.path.abspath(__file__)))
+    COLUMNS = list(Item.model_fields.keys())  # get fields from Item model
+    
     args = parse_arguments()
-    import_warehouse_from_csv(items=args.warehouse_file, sales=args.sales_file)
+    
+    w = Warehouse()
+    w.import_warehouse(items_file=args.warehouse_file, sales_file=args.sales_file)
     
     # Main loop
-    while True:
+    while True:  # exit managed by registered commands
         inp = input("What would you like to do? ")
         if not inp:
             continue
-        if inp.lower() == "exit":
-            break
         
         try:
             cmd_name, args, kwargs = parse_command_input(inp)
@@ -286,4 +328,4 @@ if __name__ == "__main__":
             print(e)
             continue
         
-        dispatch_command(cmd_name, args, kwargs)
+        dispatch_command(w, cmd_name, args, kwargs)
