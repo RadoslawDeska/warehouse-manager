@@ -22,6 +22,7 @@ registered_loaders : dict[str, Callable[[str], list[Item]]] = {}
 
 def register(command):
     """Decorator to register a function as a user-supplied command."""
+    """Decorator to register a function as a user-supplied command."""
     def decorator(func):
         registered_commands[command] = func
         return func
@@ -255,6 +256,7 @@ class Warehouse:
 
 def parse_arguments():
     """Parse command-line arguments passed to the script on startup."""
+    """Parse command-line arguments passed to the script on startup."""
     parser = argparse.ArgumentParser()
     parser.add_argument("-w", "--warehouse",
                         type=str,
@@ -304,6 +306,7 @@ def dispatch_command(warehouse: Warehouse, cmd_name, args, kwargs):
         print("Arguments received:", args)
         print("Kwargs received", kwargs)
         print("Incorrect arguments for command.")
+        print(e)
         print(e)
 
 
