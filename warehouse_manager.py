@@ -74,7 +74,7 @@ def csv_loader(path: str, /, fieldnames: list[str], *, data=None, mode=None) -> 
     elif mode == "w":
         if data is None:
             data = []
-        return IO_CSV._write_csv(path, fieldnames, data), None
+        return IO_CSV._write_csv(path, fieldnames, data)
     else:
         print("Wrong operation mode. Accepts only (r)ead or (w)rite.")
         return False, None
@@ -86,7 +86,7 @@ def json_loader(path: str, /, fieldnames=None, *, data=None, mode=None) -> tuple
     elif mode == "w":
         if data is None:
             data = []
-        return IO_JSON._write_json(path, data), None
+        return IO_JSON._write_json(path, data)
     else:
         print("Wrong operation mode. Accepts only (r)ead or (w)rite.")
         return False, None
@@ -205,16 +205,27 @@ class Warehouse:
 
     
     @staticmethod
-    def _import(path, import_as="csv", fieldnames=[]) -> list[Item]:
+    def _import(path, import_as="csv", fieldnames=[]) -> tuple[bool, list[Item]]:
         loader = registered_loaders.get(import_as)
         if loader:
             ok, lst = loader(path, fieldnames, mode='r')
-            return lst if ok else []
+            if not ok:
+                lst = []
+            return ok, lst
         # Fallback to CSV reader
         if import_as == "csv":
-            ok, lst = IO_CSV._read_csv(path, fieldnames)
-            return lst if ok else []
+            return IO_CSV._read_csv(path, fieldnames)
     
+    @staticmethod
+    def _export(path, data: list[Item], export_as="csv", fieldnames=[]) -> bool:
+        loader = registered_loaders.get(export_as)
+        if loader:
+            ok, _ = loader(path, fieldnames, data=data, mode='w')
+            return bool(ok)
+        # fallback to CSV writer
+        ok, _ = IO_CSV._write_csv(path, fieldnames, data)
+        return bool(ok)
+
     @staticmethod
     def detect_ext(path: str) -> str:
         _, ext = os.path.splitext(path)
@@ -242,16 +253,49 @@ class Warehouse:
         
         if items_file:
             import_as = self.detect_ext(items_file)
-            self.items = self._import(items_file, import_as=import_as, fieldnames=COLUMNS)
+            ok, self.items = self._import(items_file, import_as=import_as, fieldnames=COLUMNS)
+            if ok:
+                print(f"Successfully loaded items from {items_file}")
         if sales_file:
             import_as = self.detect_ext(sales_file)
-            self.sold_items = self._import(sales_file, import_as=import_as, fieldnames=COLUMNS)
-            
+            ok, self.sold_items = self._import(sales_file, import_as=import_as, fieldnames=COLUMNS)
+            if ok:
+                print(f"Successfully loaded items from {sales_file}")
+
     @register("save")
-    def export_warehouse(self):
-        pass
-
-
+    def export_warehouse(self, dir_path: str = None, items_fname="magazyn.csv", sales_fname="sprzedaż.csv"):
+        """Export warehouse to location specified in `dir_path`. If filenames are not provided
+        the default names and format (CSV) are selected.
+        """
+        if dir_path is None:
+            dir_path = BASE_DIR
+        
+        # Validate directory exists and is writeable
+        if not os.path.isdir(dir_path):
+            print(f"Directory does not exist: {dir_path}")
+            return
+        if not os.access(dir_path, os.W_OK):
+            print(f"No write permission for directory: {dir_path}")
+            return
+        
+        items_file = os.path.join(dir_path, items_fname)
+        sales_file = os.path.join(dir_path, sales_fname)
+        
+        # Export items
+        export_as = self.detect_ext(items_file)
+        ok = self._export(items_file, self.items, export_as=export_as, fieldnames=COLUMNS)
+        if ok:
+            print(f"Successfully saved items to {items_file}")
+        else:
+            print(f"Failed to save items to {items_file}")
+        
+        # Export sales
+        export_as = self.detect_ext(sales_file)
+        ok = self._export(sales_file, self.sold_items, export_as=export_as, fieldnames=COLUMNS)
+        if ok:
+            print(f"Successfully saved sales to {sales_file}")
+        else:
+            print(f"Failed to save sales to {sales_file}")
 
 def parse_arguments():
     """Parse command-line arguments passed to the script on startup."""

@@ -35,7 +35,6 @@ class IO_CSV:
             print(f"OS Error occurred: {e}")
             return False, None
         else:
-            print(f"Successfully exported data to {path}")
             return True, None
 
 class IO_JSON:
@@ -61,7 +60,7 @@ class IO_JSON:
         try:
             payload = [item.model_dump() for item in data]
             with open(path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+                json.dump(payload, f, ensure_ascii=False, indent=2, default=str)
         except PermissionError:
             print(f"Permission to write is required for {path}.")
             return False, None
@@ -72,7 +71,6 @@ class IO_JSON:
             print(f"OS Error occurred: {e}")
             return False, None
         else:
-            print(f"Successfully exported data to {path}")
             return True, None
 
 class IO_SQL:
